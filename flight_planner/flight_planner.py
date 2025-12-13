@@ -17,28 +17,28 @@ MIN_LAYOVER_MINUTES = 60
 # TIME FUNCTIONS
 # ---------------------------------------------------------
 
-def parse_time(s: str) -> int:
+def parse_time(time_str: str) -> int:
     """Parse HH:MM → minutes since midnight. Raise ValueError for bad format."""
-    if ":" not in s:
+    if ":" not in time_str:
         raise ValueError("Invalid time format")
     try:
-        h, m = s.split(":")
-        h = int(h)
-        m = int(m)
-    except:
+        hours, minutes = time_str.split(":")
+        hours = int(hours)
+        minutes = int(minutes)
+    except ValueError:
         raise ValueError("Invalid time components")
 
-    if not (0 <= h <= 23) or not (0 <= m <= 59):
+    if not (0 <= hours <= 23) or not (0 <= minutes <= 59):
         raise ValueError("Invalid hour/minute range")
 
-    return h * 60 + m
+    return hours * 60 + minutes
 
 
-def format_time(t: int) -> str:
+def format_time(total_minutes: int) -> str:
     """Convert minutes since midnight to HH:MM."""
-    h = t // 60
-    m = t % 60
-    return f"{h:02d}:{m:02d}"
+    hours = total_minutes // 60
+    mins = total_minutes % 60
+    return f"{hours:02d}:{mins:02d}"
 
 # ---------------------------------------------------------
 # FLIGHT & ITINERARY
@@ -110,22 +110,22 @@ def parse_flight_line_txt(line: str) -> Optional[Flight]:
     if len(parts) != 8:
         raise ValueError(f"Invalid flight line: {line}")
 
-    origin, dest, num, dep_s, arr_s, econ_s, biz_s, first_s = parts
+    start, end, flight_id, dep_time, arr_time, econ_price, bus_price, first_price = parts
 
-    depart = parse_time(dep_s)
-    arrive = parse_time(arr_s)
-    if arrive <= depart:
+    takeoff = parse_time(dep_time)
+    landing = parse_time(arr_time)
+    if landing <= takeoff:
         raise ValueError("Arrival must be after departure")
 
     return Flight(
-        origin,
-        dest,
-        num,
-        depart,
-        arrive,
-        int(econ_s),
-        int(biz_s),
-        int(first_s),
+        start,
+        end,
+        flight_id,
+        takeoff,
+        landing,
+        int(econ_price),
+        int(bus_price),
+        int(first_price),
     )
 
 
@@ -142,29 +142,29 @@ def load_flights_txt(path: str) -> List[Flight]:
     return flights
 
 
-def load_flights_csv(path: str) -> List[Flight]:
-    flights = []
-    with open(path, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            depart = parse_time(row["depart"])
-            arrive = parse_time(row["arrive"])
-            if arrive <= depart:
+def load_flights_csv(file_path: str) -> List[Flight]:
+    flight_list = []
+    with open(file_path, encoding="utf-8") as file_handle:
+        csv_reader = csv.DictReader(file_handle)
+        for entry in csv_reader:
+            takeoff_time = parse_time(entry["depart"])
+            landing_time = parse_time(entry["arrive"])
+            if landing_time <= takeoff_time:
                 raise ValueError("Arrival must be after departure")
 
-            flights.append(
+            flight_list.append(
                 Flight(
-                    row["origin"],
-                    row["dest"],
-                    row["flight_number"],
-                    depart,
-                    arrive,
-                    int(row["economy"]),
-                    int(row["business"]),
-                    int(row["first"]),
+                    entry["origin"],
+                    entry["dest"],
+                    entry["flight_number"],
+                    takeoff_time,
+                    landing_time,
+                    int(entry["economy"]),
+                    int(entry["business"]),
+                    int(entry["first"]),
                 )
             )
-    return flights
+    return flight_list
 
 
 def load_flights(path: str) -> List[Flight]:
@@ -180,11 +180,11 @@ def load_flights(path: str) -> List[Flight]:
 # GRAPH
 # ---------------------------------------------------------
 
-def build_graph(flights: List[Flight]) -> Dict[str, List[Flight]]:
-    graph: Dict[str, List[Flight]] = {}
-    for fl in flights:
-        graph.setdefault(fl.origin, []).append(fl)
-    return graph
+def build_graph(flight_list: List[Flight]) -> Dict[str, List[Flight]]:
+    flight_graph: Dict[str, List[Flight]] = {}
+    for flight in flight_list:
+        flight_graph.setdefault(flight.origin, []).append(flight)
+    return flight_graph
 
 
 # ---------------------------------------------------------
@@ -200,29 +200,29 @@ def find_earliest_itinerary(
     earliest_departure: int,
 ) -> Optional[Itinerary]:
 
-    pq: List[Tuple[int, List[Flight]]] = []
+    priority_queue: List[Tuple[int, List[Flight]]] = []
 
-    for fl in graph.get(start, []):
-        if fl.depart >= earliest_departure:
-            heapq.heappush(pq, (fl.arrive, [fl]))
+    for flight in graph.get(start, []):
+        if flight.depart >= earliest_departure:
+            heapq.heappush(priority_queue, (flight.arrive, [flight]))
 
-    visited = {}
+    explored_airports = {}
 
-    while pq:
-        arr_time, path = heapq.heappop(pq)
-        last = path[-1]
+    while priority_queue:
+        current_arrival, current_path = heapq.heappop(priority_queue)
+        last_flight = current_path[-1]
 
-        if last.dest == dest:
-            return Itinerary(path)
+        if last_flight.dest == dest:
+            return Itinerary(current_path)
 
-        if last.dest in visited and visited[last.dest] <= arr_time:
+        if last_flight.dest in explored_airports and explored_airports[last_flight.dest] <= current_arrival:
             continue
-        visited[last.dest] = arr_time
+        explored_airports[last_flight.dest] = current_arrival
 
-        for nxt in graph.get(last.dest, []):
-            if nxt.depart >= last.arrive + MIN_LAYOVER_MINUTES:
-                newpath = path + [nxt]
-                heapq.heappush(pq, (nxt.arrive, newpath))
+        for next_flight in graph.get(last_flight.dest, []):
+            if next_flight.depart >= last_flight.arrive + MIN_LAYOVER_MINUTES:
+                new_path = current_path + [next_flight]
+                heapq.heappush(priority_queue, (next_flight.arrive, new_path))
 
     return None
 
@@ -239,30 +239,30 @@ def find_cheapest_itinerary(
     cabin: str,
 ) -> Optional[Itinerary]:
 
-    pq: List[Tuple[int, int, List[Flight]]] = []
+    priority_queue: List[Tuple[int, int, List[Flight]]] = []
 
-    for fl in graph.get(start, []):
-        if fl.depart >= earliest_departure:
-            heapq.heappush(pq, (fl.price_for(cabin), fl.arrive, [fl]))
+    for flight in graph.get(start, []):
+        if flight.depart >= earliest_departure:
+            heapq.heappush(priority_queue, (flight.price_for(cabin), flight.arrive, [flight]))
 
-    visited = {}
+    explored_airports = {}
 
-    while pq:
-        cost, arr, path = heapq.heappop(pq)
-        last = path[-1]
+    while priority_queue:
+        total_cost, current_arrival, current_path = heapq.heappop(priority_queue)
+        last_flight = current_path[-1]
 
-        if last.dest == dest:
-            return Itinerary(path)
+        if last_flight.dest == dest:
+            return Itinerary(current_path)
 
-        if last.dest in visited and visited[last.dest] <= cost:
+        if last_flight.dest in explored_airports and explored_airports[last_flight.dest] <= total_cost:
             continue
-        visited[last.dest] = cost
+        explored_airports[last_flight.dest] = total_cost
 
-        for nxt in graph.get(last.dest, []):
-            if nxt.depart >= last.arrive + MIN_LAYOVER_MINUTES:
+        for next_flight in graph.get(last_flight.dest, []):
+            if next_flight.depart >= last_flight.arrive + MIN_LAYOVER_MINUTES:
                 heapq.heappush(
-                    pq,
-                    (cost + nxt.price_for(cabin), nxt.arrive, path + [nxt])
+                    priority_queue,
+                    (total_cost + next_flight.price_for(cabin), next_flight.arrive, current_path + [next_flight])
                 )
 
     return None
@@ -287,25 +287,25 @@ def format_comparison_table(
     rows: List[ComparisonRow],
 ) -> str:
 
-    lines = []
-    lines.append(f"Route: {origin} → {dest}, Earliest depart = {format_time(earliest_departure)}")
-    lines.append("-" * 72)
-    lines.append(f"{'Mode':20} {'Cabin':8} {'Dep':6} {'Arr':6} {'Total Price':12} {'Note'}")
-    lines.append("-" * 72)
+    output_lines = []
+    output_lines.append(f"Route: {origin} → {dest}, Earliest depart = {format_time(earliest_departure)}")
+    output_lines.append("-" * 72)
+    output_lines.append(f"{'Mode':20} {'Cabin':8} {'Dep':6} {'Arr':6} {'Total Price':12} {'Note'}")
+    output_lines.append("-" * 72)
 
     for row in rows:
         if row.itinerary is None:
-            lines.append(f"{row.mode:20} {row.cabin or '-':8} {'-':6} {'-':6} {'-':12} {row.note}")
+            output_lines.append(f"{row.mode:20} {row.cabin or '-':8} {'-':6} {'-':6} {'-':12} {row.note}")
         else:
-            itin = row.itinerary
-            dep = format_time(itin.depart_time)
-            arr = format_time(itin.arrive_time)
-            price = "-"
+            itinerary = row.itinerary
+            dep_str = format_time(itinerary.depart_time)
+            arr_str = format_time(itinerary.arrive_time)
+            cost_str = "-"
             if row.cabin:
-                price = str(itin.total_price(row.cabin))
-            lines.append(f"{row.mode:20} {row.cabin or '-':8} {dep:6} {arr:6} {price:12} {row.note}")
+                cost_str = str(itinerary.total_price(row.cabin))
+            output_lines.append(f"{row.mode:20} {row.cabin or '-':8} {dep_str:6} {arr_str:6} {cost_str:12} {row.note}")
 
-    return "\n".join(lines)
+    return "\n".join(output_lines)
 
 
 # ---------------------------------------------------------
@@ -313,16 +313,16 @@ def format_comparison_table(
 # ---------------------------------------------------------
 
 def build_arg_parser():
-    p = argparse.ArgumentParser()
-    sub = p.add_subparsers(dest="command")
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
 
-    cmp = sub.add_parser("compare")
-    cmp.add_argument("file")
-    cmp.add_argument("origin")
-    cmp.add_argument("dest")
-    cmp.add_argument("earliest")
+    compare_cmd = subparsers.add_parser("compare")
+    compare_cmd.add_argument("file")
+    compare_cmd.add_argument("origin")
+    compare_cmd.add_argument("dest")
+    compare_cmd.add_argument("earliest")
 
-    return p
+    return parser
 
 
 def main(argv=None):
@@ -333,38 +333,38 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.command == "compare":
-        flights = load_flights(args.file)
-        graph = build_graph(flights)
-        earliest = parse_time(args.earliest)
+        flight_list = load_flights(args.file)
+        flight_graph = build_graph(flight_list)
+        min_dep_time = parse_time(args.earliest)
 
-        rows = [
+        comparison_list = [
             ComparisonRow(
                 mode="Earliest arrival",
                 cabin=None,
-                itinerary=find_earliest_itinerary(graph, args.origin, args.dest, earliest),
+                itinerary=find_earliest_itinerary(flight_graph, args.origin, args.dest, min_dep_time),
                 note="",
             ),
             ComparisonRow(
                 mode="Cheapest (Economy)",
                 cabin="economy",
-                itinerary=find_cheapest_itinerary(graph, args.origin, args.dest, earliest, "economy"),
+                itinerary=find_cheapest_itinerary(flight_graph, args.origin, args.dest, min_dep_time, "economy"),
                 note="",
             ),
             ComparisonRow(
                 mode="Cheapest (Business)",
                 cabin="business",
-                itinerary=find_cheapest_itinerary(graph, args.origin, args.dest, earliest, "business"),
+                itinerary=find_cheapest_itinerary(flight_graph, args.origin, args.dest, min_dep_time, "business"),
                 note="",
             ),
             ComparisonRow(
                 mode="Cheapest (First)",
                 cabin="first",
-                itinerary=find_cheapest_itinerary(graph, args.origin, args.dest, earliest, "first"),
+                itinerary=find_cheapest_itinerary(flight_graph, args.origin, args.dest, min_dep_time, "first"),
                 note="",
             )
         ]
 
-        print(format_comparison_table(args.origin, args.dest, earliest, rows))
+        print(format_comparison_table(args.origin, args.dest, min_dep_time, comparison_list))
 
 
 if __name__ == "__main__":
