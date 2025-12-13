@@ -1,7 +1,7 @@
 name: Autograding Tests
-'on':
+on:
 - push
-- repository_dispatch
+- workflow_dispatch
 permissions:
   checks: write
   actions: read
@@ -18,8 +18,20 @@ jobs:
       uses: classroom-resources/autograding-python-grader@v1
       with:
         timeout: 10
-        setup-command: ''
+        setup-command: |
+          pip install -r requirements.txt
+          export PYTHONPATH=.
+    - name: Check test results
+      id: check_results
+      run: |
+        if [ -z "${{steps.tests.outputs.result}}" ]; then
+          echo "::error::No test results found. Tests may have failed to run."
+          echo "result=error" >> $GITHUB_OUTPUT
+        else
+          echo "result=${{steps.tests.outputs.result}}" >> $GITHUB_OUTPUT
+        fi
     - name: Autograding Reporter
+      if: steps.check_results.outputs.result != 'error'
       uses: classroom-resources/autograding-grading-reporter@v1
       env:
         TESTS_RESULTS: "${{steps.tests.outputs.result}}"
